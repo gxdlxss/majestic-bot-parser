@@ -6,258 +6,328 @@
 
 # chatparser
 
-Библиотека для разбора HTML-экспорта чата с ботом [@MajesticRolePlayBot](https://t.me/MajesticRolePlayBot).  
-Извлекает сырые события — продажи предметов, продажи имущества, наказания — и при необходимости агрегирует их в статистику.
+Разбирает HTML и JSON экспорты чата с [@MajesticRolePlayBot](https://t.me/MajesticRolePlayBot).  
+Передаёшь пути к файлам — получаешь готовые Go-структуры в памяти.
 
-Лицензия: [MIT](../LICENSE)
+Лицензия: [MIT](LICENSE)
 
 ---
 
-## Структура пакетов
+## Содержание
 
-```
-lib/
-├── event/       — тип Event, константы Kind, Filter, ItemNames
-├── parser/      — ParseHTML: разбирает HTML-файл, возвращает []Event
-└── aggregator/  — BuildAggregates, TopItems, WindowByCode и сопутствующие типы
-```
+- [Установка](#установка)
+- [Как экспортировать чат](#как-экспортировать-чат)
+- [Использование](#использование)
+- [Result](#result)
+- [Типы уведомлений](#типы-уведомлений)
+- [English](#english)
 
 ---
 
 ## Установка
 
 ```bash
-go get market_tg/lib/event
-go get market_tg/lib/parser
-go get market_tg/lib/aggregator
+go get github.com/gxdlxss/majestic-bot-parser/parser
+go get github.com/gxdlxss/majestic-bot-parser/notification
 ```
 
 ---
 
-## Быстрый старт
+## Как экспортировать чат
+
+1. Открой чат с **@MajesticRolePlayBot** в Telegram Desktop
+2. Нажми на имя бота → **⋯** → **Экспортировать историю чата**
+3. Убери галочку с **Photos**, выбери формат **HTML** или **JSON**
+4. Нажми **Экспорт**
+
+Если история большая — Telegram разобьёт её на несколько файлов  
+(`messages.html`, `messages2.html`, …). Библиотека принимает все сразу.
+
+---
+
+## Использование
 
 ```go
-import (
-    "market_tg/lib/event"
-    "market_tg/lib/parser"
-)
+import "github.com/gxdlxss/majestic-bot-parser/parser"
+```
 
-f, _ := os.Open("messages.html")
-defer f.Close()
+### HTML
 
-events, err := parser.ParseHTML(f)
+```go
+// один файл
+result, err := parser.ParseHTMLFiles("messages.html")
+
+// несколько частей одной переписки — объединяются в один результат
+result, err := parser.ParseHTMLFiles("messages.html", "messages2.html", "messages3.html")
+```
+
+### JSON
+
+```go
+result, err := parser.ParseJSONFiles("result.json")
+
+result, err := parser.ParseJSONFiles("result.json", "result2.json")
+```
+
+> HTML и JSON в одном вызове не смешиваются.
+
+### Работа с результатом
+
+```go
 if err != nil {
     log.Fatal(err)
 }
 
-for _, e := range events {
-    switch e.Kind {
-    case event.KindItemSale:
-        fmt.Printf("[продажа] %s продал %s × %d за $%.2f\n",
-            e.Character, e.ItemName, e.Quantity, e.Price)
-    case event.KindPropertySale:
-        fmt.Printf("[имущество] %s продал %s за $%.2f (покупатель: %s)\n",
-            e.Character, e.ItemName, e.Price, e.Buyer)
-    case event.KindPunishment:
-        fmt.Printf("[наказание] %s — %s (%d мин) от %s\n",
-            e.Character, e.PunType, e.DurationM, e.Admin)
-    }
+fmt.Println("Всего:", result.Total())
+
+for _, s := range result.ItemSales {
+    fmt.Printf("[продажа] %s — %s × %d за $%.2f\n",
+        s.Character, s.ItemName, s.Quantity, s.SalePrice)
+}
+
+for _, p := range result.Punishments {
+    fmt.Printf("[наказание] %s — %s (%.1f ч), причина: %s\n",
+        p.Character, p.PunishmentType, p.DurationHours, p.Reason)
+}
+
+for _, r := range result.Rentals {
+    fmt.Printf("[аренда] %s → %s, $%.2f, %.1f ч\n",
+        r.VehicleName, r.Renter, r.Price, r.DurationHours)
+}
+
+for _, a := range result.OrgAttacks {
+    fmt.Printf("[атака] %s напала на %s, квадрат %s\n",
+        a.OrgName, a.EnemyName, a.SquareName)
+}
+
+for _, d := range result.OrgDefends {
+    fmt.Printf("[защита] на %s напала %s\n",
+        d.OrgName, d.AttackerName)
+}
+
+for _, w := range result.Warehouse {
+    fmt.Printf("[склад] %s — %s × %d, забрать за %d ч\n",
+        w.Character, w.ItemName, w.Quantity, w.PickupDeadlineHours)
+}
+
+for _, e := range result.SubExpiring {
+    fmt.Printf("[подписка] %s истекает через %d дн\n", e.Login, e.DaysLeft)
 }
 ```
 
 ---
 
-## Пакет `event`
-
-### Типы событий
-
-```
-Kind                  Описание
-────────────────────  ──────────────────────────
-KindItemSale          продажа предмета на маркете
-KindPropertySale      продажа имущества
-KindPunishment        получение наказания
-```
-
-### Структура `Event`
-
-| Поле        | Тип         | Заполняется для                     |
-|-------------|-------------|-------------------------------------|
-| `Kind`      | `Kind`      | всегда                              |
-| `Time`      | `time.Time` | всегда                              |
-| `Server`    | `string`    | всегда                              |
-| `Character` | `string`    | всегда                              |
-| `SaleType`  | `string`    | `KindItemSale`, `KindPropertySale`  |
-| `ItemName`  | `string`    | `KindItemSale`, `KindPropertySale`  |
-| `Quantity`  | `int`       | `KindItemSale`, `KindPropertySale`  |
-| `Price`     | `float64`   | `KindItemSale`, `KindPropertySale`  |
-| `Buyer`     | `string`    | `KindPropertySale`                  |
-| `PunType`   | `string`    | `KindPunishment`                    |
-| `Admin`     | `string`    | `KindPunishment`                    |
-| `Reason`    | `string`    | `KindPunishment`                    |
-| `DurationM` | `int`       | `KindPunishment` (минуты)           |
+## Result
 
 ```go
-e.IsSale()       // true для KindItemSale и KindPropertySale
-e.IsPunishment() // true для KindPunishment
-```
-
-### Функции
-
-#### `Filter(events []Event, kinds ...Kind) []Event`
-
-Оставляет только события указанных типов.
-
-```go
-sales := event.Filter(events, event.KindItemSale, event.KindPropertySale)
-puns  := event.Filter(events, event.KindPunishment)
-```
-
-#### `ItemNames(events []Event) []string`
-
-Отсортированные уникальные названия предметов из `KindItemSale`.
-
-```go
-items := event.ItemNames(events)
-// ["Адреналин", "Бронежилет", "Граната", ...]
-```
-
----
-
-## Пакет `parser`
-
-#### `ParseHTML(r io.Reader) ([]Event, error)`
-
-Читает HTML-файл экспорта и возвращает все распознанные события.  
-Неизвестные типы сообщений молча пропускаются.
-
----
-
-## Пакет `aggregator`
-
-### Агрегация по серверам
-
-#### `BuildAggregates(events []Event, now time.Time, window time.Duration) map[string]*Server`
-
-Группирует события по схеме **сервер → персонаж**.  
-`window = 0` — учитывать весь период.
-
-```go
-import "market_tg/lib/aggregator"
-
-agg := aggregator.BuildAggregates(events, time.Now(), 7*24*time.Hour)
-
-for _, srvName := range aggregator.SortedServerKeys(agg) {
-    srv := agg[srvName]
-    for _, charID := range aggregator.SortedCharIDs(srv) {
-        ch := srv.Characters[charID]
-        fmt.Printf("%s / %s: наказаний %d\n", srvName, ch.Name, ch.PunTotal)
-        for key, st := range ch.Sales {
-            fmt.Printf("  %s %s: %d шт, $%.2f\n", key.SaleType, key.Name, st.Count, st.Sum)
-        }
-    }
+type Result struct {
+    ItemSales     []notification.ItemSoldNotification
+    Warehouse     []notification.ItemInWarehouseNotification
+    Punishments   []notification.PunishmentNotification
+    PropertySales []notification.PropertySoldNotification
+    Rentals       []notification.VehicleRentedNotification
+    OrgAttacks    []notification.OrgAttackNotification
+    OrgDefends    []notification.OrgDefendNotification
+    SubExpiring   []notification.SubscriptionExpiringNotification
+    SubWarning    []notification.SubscriptionWarningNotification
+    SubFrozen     []notification.SubscriptionFrozenNotification
 }
 ```
 
-### Топ предметов
-
-#### `TopItems(events []Event, now time.Time, window time.Duration) (bySum, byCount []ItemStatsRow)`
-
-Топ-5 предметов по сумме и по количеству.
+| Поле            | Что в нём                                |
+|-----------------|------------------------------------------|
+| `ItemSales`     | Продажи предметов на маркете             |
+| `Warehouse`     | Предметы, доставленные на склад          |
+| `Punishments`   | Наказания персонажей                     |
+| `PropertySales` | Продажи имущества                        |
+| `Rentals`       | Сдача транспорта в аренду                |
+| `OrgAttacks`    | Нападения вашей организации на чужую     |
+| `OrgDefends`    | Нападения чужой организации на вашу      |
+| `SubExpiring`   | Подписка заканчивается через N дней      |
+| `SubWarning`    | Подписка скоро заканчивается             |
+| `SubFrozen`     | Подписка заморожена                      |
 
 ```go
-bySum, byCount := aggregator.TopItems(events, time.Now(), 0)
-for i, r := range bySum {
-    fmt.Printf("%d. %s — $%.2f (%d шт)\n", i+1, r.Label, r.Sum, r.Count)
+result.Total() // int — сумма длин всех срезов
+```
+
+---
+
+## Типы уведомлений
+
+Каждый тип встраивает `BaseNotification`:
+
+```go
+type BaseNotification struct {
+    Type          NotificationType // "item_sold", "punishment", …
+    Server        string           // название сервера
+    CharID        string           // статический ID персонажа, напр. "12345"
+    Timestamp     time.Time        // время события
+    HTMLMessageID int              // ID сообщения в экспорте
 }
 ```
 
-### Период
+---
 
-#### `WindowByCode(code string) (label string, duration time.Duration)`
-
-| Код      | Метка       | Длительность      |
-|----------|-------------|-------------------|
-| `day`    | день        | 24h               |
-| `week`   | неделя      | 7 × 24h           |
-| `month`  | месяц       | 30 × 24h          |
-| `year`   | год         | 365 × 24h         |
-| любой    | весь период | 0 (без фильтра)   |
-
-### Вспомогательные функции
+### ItemSoldNotification
 
 ```go
-aggregator.SortedServerKeys(agg)     // серверы в алфавитном порядке
-aggregator.SortedCharIDs(srv)        // персонажи отсортированы по имени
-aggregator.SplitCharacter("Имя #ID") // → name="Имя", id="ID"
+Character string
+ItemName  string
+Quantity  int
+SalePrice float64
+Buyer     string
 ```
+
+---
+
+### ItemInWarehouseNotification
+
+```go
+Character           string
+ItemName            string
+Quantity            int
+PickupDeadlineHours int
+```
+
+---
+
+### PunishmentNotification
+
+```go
+Character      string
+PunishmentType string
+Admin          string
+Reason         string
+DurationHours  float64
+```
+
+---
+
+### PropertySoldNotification
+
+```go
+Character string
+Name      string
+SalePrice float64
+Buyer     string
+```
+
+---
+
+### VehicleRentedNotification
+
+```go
+Character     string
+VehicleName   string
+VehicleNumber string
+Price         float64
+DurationHours float64
+Renter        string
+```
+
+---
+
+### OrgAttackNotification
+
+```go
+Character     string
+OrgName       string    // ваша организация
+EnemyName     string    // на кого напали
+AttackStart   time.Time
+SquareName    string
+SquareNumber  string
+AttackerCount int
+WeaponCaliber string    // пусто = семейный кап
+```
+
+---
+
+### OrgDefendNotification
+
+```go
+Character     string
+OrgName       string    // ваша организация
+AttackerName  string    // кто напал
+AttackStart   time.Time
+SquareName    string
+SquareNumber  string
+AttackerCount int
+WeaponCaliber string    // пусто = семейный кап
+```
+
+---
+
+### SubscriptionExpiringNotification
+
+```go
+Login    string
+DaysLeft int
+```
+
+---
+
+### SubscriptionWarningNotification / SubscriptionFrozenNotification
+
+Только поля из `BaseNotification`.
 
 ---
 
 ---
 
-# chatparser — English
+## English
 
-A library for parsing HTML chat exports from [@MajesticRolePlayBot](https://t.me/MajesticRolePlayBot).  
-Extracts raw events — item sales, property sales, punishments — and optionally aggregates them into statistics.
+Parses Telegram chat exports from [@MajesticRolePlayBot](https://t.me/MajesticRolePlayBot).  
+Pass file paths — get back plain Go structs. No BSON, no files written.
 
-License: [MIT](../LICENSE)
+License: [MIT](LICENSE)
 
-## Package layout
-
-```
-lib/
-├── event/       — Event type, Kind constants, Filter, ItemNames
-├── parser/      — ParseHTML: reads the HTML file, returns []Event
-└── aggregator/  — BuildAggregates, TopItems, WindowByCode and related types
-```
-
-## Install
+### Install
 
 ```bash
-go get market_tg/lib/event
-go get market_tg/lib/parser
-go get market_tg/lib/aggregator
+go get github.com/gxdlxss/majestic-bot-parser/parser
+go get github.com/gxdlxss/majestic-bot-parser/notification
 ```
 
-## Quick start
+### Usage
 
 ```go
-import (
-    "market_tg/lib/event"
-    "market_tg/lib/parser"
-)
+import "github.com/gxdlxss/majestic-bot-parser/parser"
 
-events, err := parser.ParseHTML(f)
+// HTML (one or more files from the same chat)
+result, err := parser.ParseHTMLFiles("messages.html", "messages2.html")
 
-for _, e := range events {
-    switch e.Kind {
-    case event.KindItemSale:
-        fmt.Printf("[sale] %s sold %s × %d for $%.2f\n",
-            e.Character, e.ItemName, e.Quantity, e.Price)
-    case event.KindPropertySale:
-        fmt.Printf("[property] %s sold %s for $%.2f (buyer: %s)\n",
-            e.Character, e.ItemName, e.Price, e.Buyer)
-    case event.KindPunishment:
-        fmt.Printf("[punishment] %s — %s (%d min) by %s\n",
-            e.Character, e.PunType, e.DurationM, e.Admin)
-    }
+// JSON (one or more files from the same chat)
+result, err := parser.ParseJSONFiles("result.json")
+
+fmt.Println(result.Total())
+
+for _, s := range result.ItemSales {
+    fmt.Println(s.Character, s.ItemName, s.Quantity, s.SalePrice)
+}
+for _, p := range result.Punishments {
+    fmt.Println(p.Character, p.PunishmentType, p.DurationHours)
+}
+for _, r := range result.Rentals {
+    fmt.Println(r.VehicleName, r.Renter, r.Price)
 }
 ```
 
-## API summary
+> HTML and JSON cannot be mixed in a single call.
 
-| Package      | Function / Type           | Description                                      |
-|--------------|---------------------------|--------------------------------------------------|
-| `event`      | `Event`, `Kind`           | Core types                                       |
-| `event`      | `Filter(events, kinds…)`  | Keep only events of given kinds                  |
-| `event`      | `ItemNames(events)`       | Sorted unique item names from `KindItemSale`     |
-| `parser`     | `ParseHTML(r)`            | Parse HTML export → `[]Event`                    |
-| `aggregator` | `BuildAggregates(…)`      | Group events by server → character               |
-| `aggregator` | `TopItems(…)`             | Top-5 items by revenue and quantity              |
-| `aggregator` | `WindowByCode(code)`      | Map `"day/week/month/year/all"` → duration       |
-| `aggregator` | `SortedServerKeys(agg)`   | Server names sorted alphabetically               |
-| `aggregator` | `SortedCharIDs(srv)`      | Character IDs sorted by name                     |
-| `aggregator` | `SplitCharacter("N #ID")` | Split into name and ID                           |
+### Result fields
 
-Field reference: see the Russian section above — field names are identical.
+| Field | Type | Description |
+|---|---|---|
+| `ItemSales` | `[]ItemSoldNotification` | Items sold on the market |
+| `Warehouse` | `[]ItemInWarehouseNotification` | Items at warehouse |
+| `Punishments` | `[]PunishmentNotification` | Character punishments |
+| `PropertySales` | `[]PropertySoldNotification` | Property sold |
+| `Rentals` | `[]VehicleRentedNotification` | Vehicles rented out |
+| `OrgAttacks` | `[]OrgAttackNotification` | Your org attacked another |
+| `OrgDefends` | `[]OrgDefendNotification` | Your org was attacked |
+| `SubExpiring` | `[]SubscriptionExpiringNotification` | Subscription expiring in N days |
+| `SubWarning` | `[]SubscriptionWarningNotification` | Subscription expiring soon |
+| `SubFrozen` | `[]SubscriptionFrozenNotification` | Subscription frozen |
+
+All types embed `BaseNotification`: `Type`, `Server`, `CharID`, `Timestamp`, `HTMLMessageID`.
